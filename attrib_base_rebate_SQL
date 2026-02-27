@@ -1,0 +1,61 @@
+with origattribdata as (select "storeProductId", account, "originalStoreProductId" as "OSPI", "originalProductName" as "OPN" from table_a
+where "attribClaimedSticker" is not NULL
+and "originalStoreProductId" is not NULL
+group by "storeProductId", account, "originalStoreProductId", "originalProductName")
+select
+a.id, a."purchaseHistoryId", a.account, a.store, a."storeProductId", a.contract, a."rawPrice", a."rawSize", a."rawQty", a."stickerDisplayedDate", a."stickerDisplayedType", a."stickerClickedDate", a."stickerClickedType", a."attribClaimedSticker", a."priorAttribSticker", a."priorAttribDate", a.timestamp, a."updatedAt", a."purchaseDate", a."originalProductPricePerOunce", a."purchasedProductPricePerOunce", a.savings, a."totalPrice", a."originalNormalizedSize", a."purchasedProductNormalizedSize", a."purchasedProductName", a."purchasedProductSysco", a."originalCompSysco", a."originalStoreProductId", a."originalProductName", a."priorAttribSavings", a."numPriorPurchases", a."indirectAttributionRepurchase", a."nonContractWithTypeCMatches", a."purchasedProductFMCategoryId", a."prior90PurchaseDate",
+gd.group_id, coalesce( a.calculation_type, cm.calculation_type) as "calculation_type", coalesce(a.calculation_amount, cm.calculation_amount) as "calcution_amount", o."OSPI" , o."OPN" ,
+case
+	when a."originalStoreProductId" is null then o."OSPI" else a."originalStoreProductId"
+END AS "Original Store ProductId",
+case
+	when a."originalProductName" is null then o."OPN" else a."originalProductName"
+END AS "Original Product Name",
+case
+    when cm.program_type in ('C', 'P') then 0
+	when coalesce( a.calculation_type, cm.calculation_type) = 'FIXED_AMOUNT_PER_WEIGHT'
+		then (((a."purchasedProductNormalizedSize"/16) * cast(
+	REGEXP_REPLACE(coalesce(a.calculation_amount, cm.calculation_amount), '[^\d\.]', '', 'g')
+	as numeric)) * cast(a."rawQty" as int))
+	when coalesce( a.calculation_type, cm.calculation_type) = 'FIXED_AMOUNT_PER_QTY'
+		then cast(a."rawQty" as int) * cast(
+	REGEXP_REPLACE(coalesce(a.calculation_amount, cm.calculation_amount), '[^\d\.]', '', 'g')
+	as numeric)
+	when coalesce( a.calculation_type, cm.calculation_type) = 'PERCENT_OF_PRICE'
+		then a."totalPrice"  * cast(
+	REGEXP_REPLACE(coalesce(a.calculation_amount, cm.calculation_amount), '[^\d\.]', '', 'g')
+	as numeric) / 100
+	ELSE NULL
+END AS rebate_amount,
+cast(
+	REGEXP_REPLACE(coalesce(a.calculation_amount, cm.calculation_amount), '[^\d\.]', '', 'g')
+	as numeric) calculation_normalized, a."totalPrice" as Invoice_Line_total,
+	gd.aggregator_id,
+	coalesce(a.manufacturer, cm.manufacturer)  as "manufacturer"
+from table_a a
+left join account_detail ad on a.account = ad.account
+left join group_detail gd on ad.group_detail_id = gd.id
+left join lateral (
+    select *
+    from contract_master cm
+    where a."storeProductId" = cm."storeProductId"
+      and a.store = cm.store
+      and cm.program_type != 'C'
+    order by
+      case cm.program_type
+        when 'R' then 1
+        when 'P' then 2
+        else 3
+      end
+    limit 1
+) cm on true
+left join purchase_history ph on cast(a."purchaseHistoryId" as uuid) = cast(ph.id as uuid)
+and (
+    a.contract = cm.program_type
+    or (a.contract = 'RP' and cm.program_type = 'R')
+  )
+left join origattribdata o on a."storeProductId" = o."storeProductId" and a.account = o.account
+where gd.client = 'CLIENT_A'
+and ("attribClaimedSticker" is not null OR "priorAttribSticker" is not null)
+and NOT ( "priorAttribSticker" IN ('X2', 'X3', 'Y') AND a.contract = 'N')
+and NOT ( "attribClaimedSticker" IN ('X2', 'X3', 'Y') AND a.contract = 'N')
